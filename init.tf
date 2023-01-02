@@ -101,7 +101,7 @@ resource "null_resource" "kustomization" {
 
       resources = concat(
         [
-          "https://github.com/hetznercloud/hcloud-cloud-controller-manager/releases/download/${local.ccm_version}/ccm-networks.yaml",
+          var.override_ccm != null ? var.override_ccm : "https://github.com/hetznercloud/hcloud-cloud-controller-manager/releases/download/${local.ccm_version}/ccm-networks.yaml",
           "https://github.com/weaveworks/kured/releases/download/${local.kured_version}/kured-${local.kured_version}-dockerhub.yaml",
           "https://raw.githubusercontent.com/rancher/system-upgrade-controller/master/manifests/system-upgrade-controller.yaml",
         ],
@@ -119,8 +119,8 @@ resource "null_resource" "kustomization" {
         [
           file("${path.module}/kustomize/kured.yaml"),
           file("${path.module}/kustomize/system-upgrade-controller.yaml"),
-          "ccm.yaml",
         ],
+        var.override_ccm != null ? [] : ["ccm.yaml"],
         lookup(local.cni_install_resource_patches, var.cni_plugin, [])
       )
     })
@@ -223,11 +223,14 @@ resource "null_resource" "kustomization" {
 
   # Deploy secrets, logging is automatically disabled due to sensitive variables
   provisioner "remote-exec" {
-    inline = [
-      "set -ex",
-      "kubectl -n kube-system create secret generic hcloud --from-literal=token=${var.hcloud_token} --from-literal=network=${hcloud_network.k3s.name} --dry-run=client -o yaml | kubectl apply -f -",
-      "kubectl -n kube-system create secret generic hcloud-csi --from-literal=token=${var.hcloud_token} --dry-run=client -o yaml | kubectl apply -f -",
-    ]
+    inline = concat(
+      ["set -ex"],
+      [
+        "kubectl -n kube-system create secret generic hcloud --from-literal=token=${var.hcloud_token} --from-literal=network=${hcloud_network.k3s.name} --dry-run=client -o yaml | kubectl apply -f -",
+        "kubectl -n kube-system create secret generic hcloud-csi --from-literal=token=${var.hcloud_token} --dry-run=client -o yaml | kubectl apply -f -",
+      ],
+      [for s in var.extra_init_secrets : format("%s %s --dry-run=client -o yaml | kubectl apply -f -", "kubectl -n ${s.namespace} create secret generic ${s.name}", join(" ", [for key, value in s.literals : "--from-literal=${key}=${value}"]))],
+    )
   }
 
   # Deploy our post-installation kustomization
